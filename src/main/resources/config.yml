@@ -1,0 +1,5 @@
+telegram-bot-token: ""
+telegram-chat-id: ""
+telegram-url-schema: "https"
+telegram-url-host: "api.telegram.org"
+telegram-url-port: "443"
