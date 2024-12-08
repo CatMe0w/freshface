@@ -36,10 +36,12 @@ import java.util.stream.Stream;
 public class Freshface {
 
     @Inject
+    @SuppressWarnings("unused")
     private Logger logger;
 
     @Inject
     @DataDirectory
+    @SuppressWarnings("unused")
     private Path dataDirectory;
 
     private Set<String> playerNames;
