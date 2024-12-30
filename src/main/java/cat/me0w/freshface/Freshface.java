@@ -14,15 +14,10 @@ import org.telegram.telegrambots.meta.generics.TelegramClient;
 import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
 import org.yaml.snakeyaml.Yaml;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Stream;
 
 @Plugin(
@@ -49,6 +44,9 @@ public class Freshface {
 
     private String chatId;
     private TelegramClient telegramClient;
+
+    private boolean snapperRetainSnapshotEnabled = false;
+    private String snapperConfig;
 
     @Subscribe
     public void onProxyInitialization(ProxyInitializeEvent event) {
@@ -92,6 +90,8 @@ public class Freshface {
                 String telegramUrlSchema = (String) configData.get("telegram-url-schema");
                 String telegramUrlHost = (String) configData.get("telegram-url-host");
                 String telegramUrlPort = (String) configData.get("telegram-url-port");
+                snapperRetainSnapshotEnabled = (boolean) configData.get("snapper-retain-snapshot-enabled");
+                snapperConfig = (String) configData.get("snapper-config");
 
                 if (botToken != null && chatId != null) {
                     if (telegramUrlSchema != null && telegramUrlHost != null && telegramUrlPort != null) {
@@ -121,10 +121,76 @@ public class Freshface {
                 logger.error("Failed to write player name to file", e);
             }
 
-            logger.info("New player {} joined the server", playerName);
+            // Retain the last snapshot before the player joined
+            String snapshotId = null;
+            if (snapperRetainSnapshotEnabled) {
+                try {
+                    List<String> baseCommand = new ArrayList<>();
+                    baseCommand.add("snapper");
+                    if (snapperConfig != null) {
+                        baseCommand.add("-c");
+                        baseCommand.add(snapperConfig);
+                    }
+
+                    List<String> retrieveCommand = new ArrayList<>(baseCommand);
+                    retrieveCommand.add("list");
+                    retrieveCommand.add("--columns");
+                    retrieveCommand.add("number");
+
+                    Process retrieveProcess = new ProcessBuilder(retrieveCommand)
+                            .redirectErrorStream(true)
+                            .start();
+
+                    List<String> outputLines = new ArrayList<>();
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(retrieveProcess.getInputStream()))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            outputLines.add(line.trim());
+                        }
+                    }
+
+                    int retrieveExitCode = retrieveProcess.waitFor();
+                    if (retrieveExitCode != 0 || outputLines.isEmpty()) {
+                        logger.error("Failed to retrieve snapshot list. Exit code: {}", retrieveExitCode);
+                    } else {
+                        snapshotId = outputLines.get(outputLines.size() - 1); // Get the last line; mock "tail -n 1"
+                    }
+
+                    if (snapshotId != null) {
+                        List<String> modifyCommand = new ArrayList<>(baseCommand);
+                        modifyCommand.add("modify");
+                        modifyCommand.add("--userdata");
+                        modifyCommand.add("important=yes");
+                        modifyCommand.add(snapshotId);
+
+                        Process modifyProcess = new ProcessBuilder(modifyCommand)
+                                .redirectErrorStream(true)
+                                .start();
+
+                        int modifyExitCode = modifyProcess.waitFor();
+                        if (modifyExitCode != 0) {
+                            logger.error("Failed to retain snapshot {}. Exit code: {}", snapshotId, modifyExitCode);
+                            snapshotId = null;
+                        }
+                    }
+                } catch (IOException | InterruptedException e) {
+                    logger.error("Failed to execute snapper command", e);
+                }
+            }
+
+            if (snapshotId != null) {
+                logger.info("New player {} joined the server. Snapshot {} retained.", playerName, snapshotId);
+            } else {
+                logger.info("New player {} joined the server", playerName);
+            }
 
             if (telegramClient != null && chatId != null) {
-                SendMessage sendMessage = new SendMessage(chatId, "New player " + playerName + " joined the server");
+                SendMessage sendMessage = new SendMessage(chatId, "New player " + playerName + " joined the server.");
+
+                if (snapshotId != null) {
+                    sendMessage.setText(sendMessage.getText() + " Snapshot " + snapshotId + " retained.");
+                }
+
                 try {
                     telegramClient.execute(sendMessage);
                 } catch (TelegramApiException e) {
